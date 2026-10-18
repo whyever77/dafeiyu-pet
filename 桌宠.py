@@ -5,30 +5,23 @@
 聊天时只禁用移动，呼吸/摇摆/小动作正常
 """
 import ctypes
-import psutil
 import json
+import logging
 import math
 import os
 import random
 import subprocess
 import sys
 import threading
+import urllib.parse
 
-def load_config():
-    try:
-        with open("config.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print("配置读取失败:", e)
-        return {
-            "city": "汕头"
-        }
+import psutil
 
 try:
     import pynvml
     pynvml.nvmlInit()
     GPU_AVAILABLE = True
-except:
+except Exception:
     GPU_AVAILABLE = False
 
 import requests
@@ -53,9 +46,32 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     BUNDLE_DIR = APP_DIR
-    PYTHONW = os.path.join(APP_DIR, ".venv", "Scripts", "pythonw.exe")
+    _venv_pythonw = os.path.join(APP_DIR, ".venv", "Scripts", "pythonw.exe")
+    if os.path.exists(_venv_pythonw):
+        PYTHONW = _venv_pythonw
+    else:
+        # 没有 .venv 时用当前 Python 旁边的 pythonw，避免开机自启指向不存在的路径
+        _candidate = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        PYTHONW = _candidate if os.path.exists(_candidate) else sys.executable
 SPRITE_DIR = os.path.join(BUNDLE_DIR, "sprites")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+LOG_PATH = os.path.join(APP_DIR, "pet.log")
+
+
+def setup_logging():
+    try:
+        logging.basicConfig(
+            filename=LOG_PATH,
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            encoding="utf-8",
+        )
+    except Exception:
+        # 程序目录不可写时退化为控制台日志，至少不崩
+        logging.basicConfig(level=logging.INFO)
+
+
+setup_logging()
 
 BUBBLE_H = 56
 MARGIN = 4
@@ -248,6 +264,12 @@ class ChatDialog(QDialog):
             self.parent().chat_paused = False
         super().reject()
 
+    def hideEvent(self, event):
+        # 任何方式关闭聊天框后都恢复桌宠移动
+        if self.parent():
+            self.parent().chat_paused = False
+        super().hideEvent(event)
+
 
 class FunctionPanel(QFrame):
     """左键弹出的功能列表 - 白底矩形，只有一个🗨️图标"""
@@ -297,6 +319,12 @@ class FunctionPanel(QFrame):
         self.show()
         self.raise_()
 
+    def hideEvent(self, event):
+        # 面板收起后恢复桌宠移动
+        if self.parent() is not None:
+            self.parent().chat_paused = False
+        super().hideEvent(event)
+
 class FoodPanel(QWidget):
     """双击弹出的喂食面板"""
 
@@ -343,12 +371,10 @@ class PetWindow(QWidget):
             self.cfg.get("city", "汕头")
         )
 
-        print("输入框结果:", city, ok)
-
         if ok and city.strip():
             self.cfg["city"] = city.strip()
-            print("cfg现在:", self.cfg["city"])
-            self.say(f"城市已设置为{city}")
+            self.save_config()
+            self.say(f"城市已设置为{city.strip()}")
 
     def __init__(self):
         self.cfg = load_json(CONFIG_PATH, {
@@ -360,6 +386,8 @@ class PetWindow(QWidget):
             "x": None,
             "y": None,
             "ds_api_key": "",
+            "api_base": DS_BASE_URL,
+            "api_model": DS_MODEL,
             "city": "汕头"
     })
         
@@ -407,6 +435,7 @@ class PetWindow(QWidget):
         self.last_system_check = 0
         self.t = 0
         self.jump_t = 0
+        self.eat_t = 0.0
         self.dragging = False
         self.drag_offset = None
         self.drag_start_pos = None
@@ -418,6 +447,7 @@ class PetWindow(QWidget):
         self.chat_history = []  # 对话历史
         self.max_history = 40   # 最多记录40条
         self._say_queue = []    # 后台线程→主线程的气泡消息队列
+        self._weather_busy = False
         
         # 聊天暂停标志
         self.chat_paused = False
@@ -429,7 +459,11 @@ class PetWindow(QWidget):
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
         self._click_timer.timeout.connect(self._on_single_click)
-        
+        # 功能面板 5 秒无操作自动收起，避免桌宠一直停着不动
+        self._panel_timer = QTimer(self)
+        self._panel_timer.setSingleShot(True)
+        self._panel_timer.timeout.connect(self.function_panel.hide)
+
         # 聊天对话框
         self.chat_dialog = ChatDialog(self)
         
@@ -468,20 +502,26 @@ class PetWindow(QWidget):
             return
         
         self.ds_busy = True
-        
+
+        base_url = str(self.cfg.get("api_base", DS_BASE_URL)).rstrip("/")
+        model = self.cfg.get("api_model", DS_MODEL)
+
         # 构建消息列表
+        history = self.chat_history[-self.max_history:]
+        if history and history[0].get("role") == "assistant":
+            history = history[1:]
         messages = [{"role": "system", "content": DS_SYSTEM}]
-        messages.extend(self.chat_history[-self.max_history:])
+        messages.extend(history)
         messages.append({"role": "user", "content": user_msg})
-        
+
         def worker():
-            url = "https://api.deepseek.com/v1/chat/completions"
+            url = f"{base_url}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "deepseek-chat",
+                "model": model,
                 "messages": messages,
                 "max_tokens": 100,
                 "temperature": 0.9
@@ -497,16 +537,19 @@ class PetWindow(QWidget):
                     self.chat_history.append({"role": "assistant", "content": reply})
                     if len(self.chat_history) > self.max_history:
                         self.chat_history = self.chat_history[-self.max_history:]
+                    if self.chat_history and self.chat_history[0]["role"] == "assistant":
+                        self.chat_history = self.chat_history[1:]
                     self._queue_say(reply)
                 else:
                     error_msg = resp.json().get("error", {}).get("message", str(resp.status_code))
                     self._queue_say(f"API错误: {error_msg[:12]}")
-                    print(f"[DeepSeek] 状态码: {resp.status_code}, 返回: {resp.text}")
+                    logging.warning("DeepSeek 状态码 %s: %s", resp.status_code, resp.text[:500])
             except requests.exceptions.Timeout:
                 self._queue_say("请求超时，检查网络")
             except requests.exceptions.ConnectionError:
                 self._queue_say("连接失败，检查网络")
             except Exception as e:
+                logging.exception("DeepSeek 请求失败")
                 self._queue_say(f"请求失败: {str(e)[:12]}")
             finally:
                 self.ds_busy = False
@@ -566,6 +609,12 @@ class PetWindow(QWidget):
         breath = 1.0 + 0.02 * math.sin(now * 2.5)
         scale = breath
         jump = -abs(math.sin(self.jump_t * 3.14159)) * 14 * self.jump_t if self.jump_t > 0 else 0
+        # 进食动画：快速上下咀嚼 + 轻微压扁
+        eat_bob = eat_sy = 0.0
+        if self.eat_t > 0:
+            phase = (1.0 - self.eat_t) * math.pi * 6
+            eat_bob = -abs(math.sin(phase)) * 3.5 * self.eat_t
+            eat_sy = 0.05 * math.sin(phase * 2) * self.eat_t
         act_rot = act_sx = act_sy = 0.0
         if self.action == "sway":
             act_rot = math.sin(self.action_t * 3.14159 * 2) * 10 * self.action_t
@@ -578,11 +627,11 @@ class PetWindow(QWidget):
                 return
             name, h, facing = key
             pix = self.sprites[(name, h)]
-            ph = pix.height() * scale * (1 + act_sy)
+            ph = pix.height() * scale * (1 + act_sy + eat_sy)
             pw = pix.width() * scale * (1 + act_sx)
             dx = cx - pw / 2
             bottom = BUBBLE_H + MARGIN + self.cur_h
-            dy = bottom - ph + jump + bob
+            dy = bottom - ph + jump + bob + eat_bob
             p.save()
             p.setOpacity(opacity)
             p.translate(cx, bottom)
@@ -628,6 +677,8 @@ class PetWindow(QWidget):
         
         if self.jump_t > 0:
             self.jump_t = max(0.0, self.jump_t - 0.06)
+        if self.eat_t > 0:
+            self.eat_t = max(0.0, self.eat_t - 0.04)
         if self.cross_t > 0:
             self.cross_t = max(0.0, self.cross_t - 0.15)
         if self.action_t > 0:
@@ -705,13 +756,18 @@ class PetWindow(QWidget):
                 if self.t - self.last_speak_tick >= 1500:
                     self.last_speak_tick = self.t
                     if pick < 0.82:
-                        self.say(random.choice(INNER_LINES), inner=True)
+                        self.say(self._pick_line(INNER_LINES), inner=True)
                     else:
-                        self.say(random.choice(LINES))
+                        self.say(self._pick_line(LINES))
 
     def _queue_say(self, text):
         """后台线程调用：只入队，由主线程 tick 统一弹出显示（线程安全）"""
         self._say_queue.append(text)
+
+    def _pick_line(self, lines):
+        """挑一句和上次不同的台词，避免 say 去重后看起来没反应"""
+        candidates = [line for line in lines if line != self.last_line]
+        return random.choice(candidates or lines)
 
     def say(self, text, inner=False):
         if text == self.last_line and not text.startswith("天气"):
@@ -754,8 +810,8 @@ class PetWindow(QWidget):
                     if temp > 80:
                         self.say("我感觉我的鱼鳍快熟了")
 
-                except Exception as e:
-                    print("GPU读取失败:", e)
+                except Exception:
+                    logging.warning("GPU 读取失败", exc_info=True)
 
     # ---------- 鼠标事件 ----------
     def mousePressEvent(self, e):
@@ -763,6 +819,7 @@ class PetWindow(QWidget):
             self.last_press_pos = e.globalPosition().toPoint()
             self.dragging = False
             self.drag_start_pos = e.globalPosition().toPoint()
+            self._panel_timer.stop()
             self.function_panel.hide()
             self.chat_dialog.hide()
             self.chat_paused = True
@@ -790,8 +847,9 @@ class PetWindow(QWidget):
                 self.target = None
                 self.rest_until = self.t * TICK + random.randint(6000, 14000)
                 if random.random() < 0.5:
-                    self.say(random.choice(DRAG_LINES))
+                    self.say(self._pick_line(DRAG_LINES))
                 self.chat_paused = False
+                self.save_config()
             else:
                 self._click_timer.start(280)  # 等双击判定；单击则回嘴+弹聊天面板
             self.last_press_pos = None
@@ -806,85 +864,81 @@ class PetWindow(QWidget):
         """单击：蹦跳回嘴 + 弹聊天面板（两不误，不想聊点鱼身外关闭）"""
         if random.random() < 0.7:
             self.jump_t = 1.0
-        if random.random() < 0.6:
-            self.say(random.choice(REACT_LINES))
+        self.say(self._pick_line(REACT_LINES))
         panel = self.function_panel
         panel.popup_at(self.x() + self.width() / 2 - panel.width() / 2,
                        self.y() - panel.height() - 10)
+        self._panel_timer.start(5000)
 
     def on_food(self, food):
         self.food_panel.hide()
         self.eat_t = 1.0
         self.jump_t = 0.6
         lines = FOOD_LINES.get(food, ["好吃！"])
-        self.say(random.choice(lines))
+        self.say(self._pick_line(lines))
 
     def _show_chat_dialog(self):
+        self._panel_timer.stop()
         key = self.cfg.get("ds_api_key", "")
         if not key:
-            self.say("请先在右键菜单里设置 DeepSeek Key！")
+            self.say("先设置一下 DeepSeek Key 吧～")
             self.chat_paused = False
-            return
+            self._set_key_dialog()
+            if not self.cfg.get("ds_api_key", ""):
+                return
+        self.chat_paused = True
         self.chat_dialog.popup_at(
             self.x() + self.width() / 2,
             self.y() + BUBBLE_H
         )
 
-    """def _get_city_by_ip(self):
-        try:
-            r = requests.get("http://ip-api.com/json/?fields=city&lang=zh-CN", timeout=5)
-            if r.status_code == 200:
-                city = r.json().get("city", "")
-                if city:
-                    return city
-        except:
-            pass
-        return "汕头" """
-
     def _get_weather(self):
-        try:
-            city = self.cfg.get("city", "汕头")
-            print("当前城市:", city)
+        if self._weather_busy:
+            self.say("还在查天气，别催～")
+            return
+        self._weather_busy = True
+        city = self.cfg.get("city", "汕头")
+        self.say("查天气中…")
 
-            url = f"https://wttr.in/{city}?format=j1"
-
-            r = requests.get(
-                url,
-                timeout=10,
-                headers={
-                    "User-Agent": "Mozilla/5.0"
+        def worker():
+            try:
+                url = "https://wttr.in/{}?format=j1".format(urllib.parse.quote(city))
+                r = requests.get(
+                    url,
+                    timeout=10,
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                r.raise_for_status()
+                weather = r.json()["current_condition"][0]
+                temp = weather["temp_C"]
+                weather_map = {
+                    "Sunny": "晴",
+                    "Clear": "晴",
+                    "Partly cloudy": "多云",
+                    "Cloudy": "阴",
+                    "Overcast": "阴",
+                    "Mist": "薄雾",
+                    "Fog": "雾",
+                    "Light rain": "小雨",
+                    "Patchy rain nearby": "局部小雨",
+                    "Moderate rain": "中雨",
+                    "Heavy rain": "大雨",
+                    "Light snow": "小雪",
+                    "Moderate snow": "中雪",
+                    "Heavy snow": "大雪",
+                    "Thunderstorm": "雷阵雨",
                 }
-            )
+                raw_weather = weather["weatherDesc"][0]["value"]
+                desc = weather_map.get(raw_weather, raw_weather)
+                self._queue_say(f"{city}今天{temp}°，天气{desc}")
+            except Exception:
+                logging.exception("天气获取失败")
+                self._queue_say("天气获取失败")
+            finally:
+                self._weather_busy = False
 
-            print("状态:", r.status_code)
-            print(r.text[:500])
+        threading.Thread(target=worker, daemon=True).start()
 
-            data = r.json()
-
-            weather = data["current_condition"][0]
-
-            temp = weather["temp_C"]
-
-            weather_map = {
-                "Sunny": "晴",
-                "Clear": "晴",
-                "Partly cloudy": "多云",
-                "Cloudy": "阴",
-                "Light rain": "小雨",
-                "Moderate rain": "中雨",
-                "Heavy rain": "大雨"
-            }
-
-            raw_weather = weather["weatherDesc"][0]["value"]
-
-            desc = weather_map.get(raw_weather, raw_weather)
-
-            self.say(f"{city}今天{temp}°，天气{desc}")
-
-        except Exception as e:
-            print("天气错误:", repr(e))
-            self.say("天气获取失败")
-    
 
     def _build_menu(self):
         m = QMenu(self)
@@ -900,8 +954,13 @@ class PetWindow(QWidget):
             a.setCheckable(True)
             a.setChecked(abs(self.cur_h - 340 * mult) < 2)
             a.triggered.connect(lambda _, v=mult: self.set_size(v))
+        food_menu = m.addMenu("喂食")
+        for f in FOODS:
+            food_menu.addAction(f, lambda checked=False, x=f: self.on_food(x))
+        m.addAction("说句话", self.say_something)
         m.addAction("设置 Key", self._set_key_dialog)
         m.addAction("查看天气", self._get_weather)
+        m.addAction("设置城市", self._set_city_dialog)
         m.addSeparator()
         m.addAction("显示/隐藏", self.toggle_visible)
         m.addAction("回到屏幕内", self.snap_into_screen)
@@ -924,13 +983,14 @@ class PetWindow(QWidget):
     def _set_key_dialog(self):
         key, ok = QInputDialog.getText(
             self, 
-            "设置 DeepSeek Key", 
+            "设置 DeepSeek Key",
             "输入你的 API Key（从 platform.deepseek.com 获取）:",
-            QLineEdit.EchoMode.Normal,
+            QLineEdit.EchoMode.Password,
             self.cfg.get("ds_api_key", "")
         )
         if ok and key.strip():
             self.cfg["ds_api_key"] = key.strip()
+            self.save_config()
             self.say("Key 设置成功！")
         elif ok and not key.strip():
             self.say("Key 不能为空")
@@ -945,10 +1005,14 @@ class PetWindow(QWidget):
         self._build_menu().exec(e.globalPos())
 
     # ---------- 功能 ----------
+    def say_something(self):
+        self.say(self._pick_line(LINES))
+
     def set_mode(self, mode):
         self.mode = mode
         self.target = None
         self.cfg["mode"] = mode
+        self.save_config()
 
     def set_size(self, mult):
         self.cur_h = int(340 * mult)
@@ -959,6 +1023,7 @@ class PetWindow(QWidget):
         self.win_w = max(p.width() for k, p in self.sprites.items() if k[1] == self.cur_h) + self.win_mx * 2
         self.setFixedSize(self.win_w, self.cur_h + BUBBLE_H + MARGIN * 2 + 10)
         self.snap_into_screen()
+        self.save_config()
 
     def snap_into_screen(self):
         geo = (self.screen() or QApplication.primaryScreen()).availableGeometry()
@@ -980,6 +1045,7 @@ class PetWindow(QWidget):
     def set_passthrough(self, on):
         self.cfg["passthrough"] = bool(on)
         self._apply_passthrough(bool(on))
+        self.save_config()
         if on:
             self.say("我隐身了！右键托盘图标解除～")
 
@@ -987,26 +1053,36 @@ class PetWindow(QWidget):
         self.cfg["topmost"] = bool(on)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
         self.show()
+        self.save_config()
 
     def set_autostart(self, on):
-        self.cfg["autostart"] = bool(on)
         lnk = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows",
                            "Start Menu", "Programs", "Startup", "大肥鱼桌宠.lnk")
         try:
             if on:
+                if getattr(sys, "frozen", False):
+                    target, args = sys.executable, ""
+                else:
+                    target = PYTHONW
+                    args = f'"{os.path.join(APP_DIR, "桌宠.py")}"'
                 ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');"
-                      "$s.TargetPath='{}';$s.Arguments='\"{}\"';$s.WorkingDirectory='{}';$s.Save()"
-                      .format(lnk, PYTHONW,
-                              "" if getattr(sys, "frozen", False) else os.path.join(APP_DIR, "桌宠.py"),
-                              APP_DIR))
+                      "$s.TargetPath='{}';$s.Arguments='{}';$s.WorkingDirectory='{}';$s.Save()"
+                      .format(lnk.replace("'", "''"),
+                              target.replace("'", "''"),
+                              args.replace("'", "''"),
+                              APP_DIR.replace("'", "''")))
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=True)
+                self.cfg["autostart"] = True
                 self.say("已开机自启，明天见～")
             else:
                 if os.path.exists(lnk):
                     os.remove(lnk)
+                self.cfg["autostart"] = False
                 self.say("已取消开机自启")
+            self.save_config()
         except Exception as ex:
+            logging.exception("设置开机自启失败")
             QMessageBox.warning(self, "开机自启", f"设置失败：{ex}")
 
     def toggle_visible(self):
@@ -1016,10 +1092,16 @@ class PetWindow(QWidget):
             self.show()
             self.raise_()
 
+    def save_config(self):
+        try:
+            self.cfg["x"], self.cfg["y"] = self.x(), self.y()
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.cfg, f, ensure_ascii=False, indent=2)
+        except Exception:
+            logging.exception("保存配置失败")
+
     def quit_app(self):
-        self.cfg["x"], self.cfg["y"] = self.x(), self.y()
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(self.cfg, f, ensure_ascii=False, indent=2)
+        self.save_config()
         self.tray.hide()
         QApplication.quit()
 
@@ -1031,13 +1113,20 @@ def main():
     sys.exit(app.exec())
 
 
+def _excepthook(exc_type, exc_value, exc_tb):
+    logging.error("未捕获异常", exc_info=(exc_type, exc_value, exc_tb))
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
 if __name__ == "__main__":
+    sys.excepthook = _excepthook
     try:
         main()
     except Exception as ex:
+        logging.exception("程序启动失败")
         try:
             app = QApplication.instance() or QApplication(sys.argv)
-            QMessageBox.critical(None, "大肥鱼桌宠出错", str(ex))
+            QMessageBox.critical(None, "大肥鱼桌宠出错", f"{ex}\n\n详细日志：{LOG_PATH}")
         except Exception:
             pass
         raise

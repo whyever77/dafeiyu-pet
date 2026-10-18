@@ -33,7 +33,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='桌宠',
+    name='大肥鱼桌宠',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

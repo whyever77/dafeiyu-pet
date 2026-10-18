@@ -1,4 +1,5 @@
 PySide6>=6.5
 requests
 psutil
-pynvml
+nvidia-ml-py>=12
+Pillow>=10

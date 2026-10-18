@@ -1,5 +1,6 @@
 # 运行时生成
 config.json
+pet.log
 
 # 虚拟环境
 .venv/

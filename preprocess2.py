@@ -2,12 +2,20 @@
 """精灵边缘去污 + 预乘alpha缩放：
 1) 边缘像素做白底去混合，恢复真实颜色（消除移动/旋转时的白边）
 2) 用黑底/白底合成法做预乘alpha缩放，直接生成各尺寸精灵
+
+用法：
+    python preprocess2.py [素材目录] [输出目录]
+
+不放参数时，默认从脚本所在目录读取 正面.png / 侧面.png / 背面.png，
+输出到脚本目录下的 sprites/。
 """
 from PIL import Image
 import os
+import sys
 
-SRC = r"D:\图图\大肥鱼"
-OUT = r"D:\图图\大肥鱼\桌宠程序\sprites"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else BASE_DIR
+OUT = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else os.path.join(BASE_DIR, "sprites")
 SIZES = {0.55: 187, 0.7: 238, 0.9: 306}
 
 os.makedirs(OUT, exist_ok=True)
@@ -70,7 +78,11 @@ def premult_resize(im, height):
 
 
 for name in ["正面", "侧面", "背面"]:
-    raw = cutout(os.path.join(SRC, f"{name}.png"))
+    src_path = os.path.join(SRC, f"{name}.png")
+    if not os.path.exists(src_path):
+        raise SystemExit(f"找不到素材：{src_path}\n请把 正面.png / 侧面.png / 背面.png 放到程序目录，"
+                         f"或运行 python preprocess2.py <素材目录>")
+    raw = cutout(src_path)
     clean = decontaminate(raw)
     for mult, h in SIZES.items():
         im = premult_resize(clean, h)

@@ -1,0 +1,50 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name "大肥鱼桌宠"
+          --add-data "sprites;sprites"
+          --icon icon.ico
+          桌宠.py
+
+      - name: Package source zip
+        run: >
+          Compress-Archive -Force
+          -Path 桌宠.py,preprocess.py,preprocess2.py,test_pet.py,启动桌宠.bat,requirements.txt,README.md,LICENSE,icon.ico,桌宠.spec,config.example.json,sprites
+          -DestinationPath "大肥鱼桌宠_源码.zip"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            dist/大肥鱼桌宠.exe
+            大肥鱼桌宠_源码.zip

@@ -1,10 +1,20 @@
 # -*- coding: utf-8 -*-
-"""三视图抠图+规格化：白底 → 透明 PNG，统一高度，裁掉空白边。"""
-from PIL import Image, ImageDraw
-import os
+"""三视图抠图+规格化：白底 → 透明 PNG，统一高度，裁掉空白边。
 
-SRC = r"D:\图图\大肥鱼"
-OUT = r"D:\图图\大肥鱼\桌宠程序\sprites"
+用法：
+    python preprocess.py [素材目录] [输出目录]
+
+不放参数时，默认从脚本所在目录读取 正面.png / 侧面.png / 背面.png，
+输出到脚本目录下的 sprites/。
+"""
+import os
+import sys
+
+from PIL import Image, ImageDraw
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else BASE_DIR
+OUT = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else os.path.join(BASE_DIR, "sprites")
 TARGET_H = 340  # 桌宠显示高度(px)
 
 os.makedirs(OUT, exist_ok=True)
@@ -12,7 +22,6 @@ os.makedirs(OUT, exist_ok=True)
 def cutout(path):
     im = Image.open(path).convert("RGBA")
     w, h = im.size
-    seed = im.getpixel((0, 0))
     # 1) 从四角做连通域泛洪，把背景整片变透明（人物内部的白不受影响）
     for sx, sy in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]:
         ImageDraw.floodfill(im, (sx, sy), (0, 0, 0, 0), thresh=30)
@@ -47,7 +56,11 @@ def cutout(path):
     return im
 
 for name in ["正面", "侧面", "背面"]:
-    im = cutout(os.path.join(SRC, f"{name}.png"))
+    src_path = os.path.join(SRC, f"{name}.png")
+    if not os.path.exists(src_path):
+        raise SystemExit(f"找不到素材：{src_path}\n请把 正面.png / 侧面.png / 背面.png 放到程序目录，"
+                         f"或运行 python preprocess.py <素材目录>")
+    im = cutout(src_path)
     out_path = os.path.join(OUT, f"{name}.png")
     im.save(out_path)
     print(f"{name}: {im.size} -> {out_path}")
