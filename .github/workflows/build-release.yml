@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,22 +31,43 @@ jobs:
       - name: Build exe
         run: >
           pyinstaller --noconfirm --onefile --windowed
-          --name "大肥鱼桌宠"
+          --name dafeiyu-pet
           --add-data "sprites;sprites"
           --icon icon.ico
           桌宠.py
 
       - name: Package source zip
-        run: >
-          Compress-Archive -Force
-          -Path 桌宠.py,preprocess.py,preprocess2.py,test_pet.py,启动桌宠.bat,requirements.txt,README.md,LICENSE,icon.ico,桌宠.spec,config.example.json,sprites
-          -DestinationPath "大肥鱼桌宠_源码.zip"
+        run: python tools/package_source.py
+
+      # 同一 tag 重跑时，先删掉旧 assets，避免 default.exe / 乱码 zip 残留
+      - name: Delete old release assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              for (const asset of release.assets) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: asset.id,
+                });
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          name: 大肥鱼桌宠 ${{ github.ref_name }}
           fail_on_unmatched_files: true
           generate_release_notes: true
           files: |
-            dist/大肥鱼桌宠.exe
-            大肥鱼桌宠_源码.zip
+            dist/dafeiyu-pet.exe
+            dafeiyu-pet-source.zip

@@ -9,6 +9,7 @@ pet.log
 build/
 dist/
 *.spec
+dafeiyu-pet-source.zip
 
 # Python 缓存
 __pycache__/

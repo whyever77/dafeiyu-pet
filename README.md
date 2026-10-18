@@ -12,7 +12,7 @@ DeepSeek V4 Pro 二创形象「鲸鱼娘·大肥鱼」的透明桌面宠物。
 
 ### 方式一：免安装 exe（推荐）
 
-到 [Releases](https://github.com/1190fasheqi/dafeiyu-pet/releases) 下载 `大肥鱼桌宠.exe`，双击即用，不需要安装 Python。
+到 [Releases](https://github.com/1190fasheqi/dafeiyu-pet/releases) 下载 `dafeiyu-pet.exe`，双击即用，不需要安装 Python。
 
 > 杀毒软件可能对 PyInstaller 产物误报，加信任即可。
 
@@ -86,10 +86,10 @@ Windows 用户也可以直接双击 `启动桌宠.bat`（自动选择 `.venv` �
 
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name 大肥鱼桌宠 --add-data "sprites;sprites" --icon icon.ico 桌宠.py
+pyinstaller --noconfirm --onefile --windowed --name dafeiyu-pet --add-data "sprites;sprites" --icon icon.ico 桌宠.py
 ```
 
-产物在 `dist/大肥鱼桌宠.exe`。推送 `v*` 标签时，GitHub Actions 也会自动构建并发布 Release（见 `.github/workflows/build-release.yml`）。
+产物在 `dist/dafeiyu-pet.exe`。推送 `v*` 标签时，GitHub Actions 也会自动构建并发布 Release（见 `.github/workflows/build-release.yml`）。
 
 ## 更换形象
 
@@ -119,6 +119,7 @@ python preprocess.py <素材目录> [输出目录]
 | config.example.json | 配置示例 |
 | 桌宠.spec | PyInstaller 打包配置 |
 | test_pet.py | 基础自动化测试（菜单 / 配置保存 / 喂食动画 / 天气异步） |
+| tools/package_source.py | 打源码 zip（UTF-8 文件名，供 CI 使用） |
 | .github/workflows/build-release.yml | 打 tag 自动构建 exe 并发布 Release |
 
 ## 测试
