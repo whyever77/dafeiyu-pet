@@ -1,8 +1,10 @@
 # 大肥鱼桌宠 🐋
 
-[![test](https://github.com/1190fasheqi/dafeiyu-pet/actions/workflows/test.yml/badge.svg)](https://github.com/1190fasheqi/dafeiyu-pet/actions/workflows/test.yml)
+[![test](https://github.com/whyever77/dafeiyu-pet/actions/workflows/test.yml/badge.svg)](https://github.com/whyever77/dafeiyu-pet/actions/workflows/test.yml)
 
 ![大肥鱼桌宠展示图](docs/screenshot.png)
+
+> 本仓库是 [1190fasheqi/dafeiyu-pet](https://github.com/1190fasheqi/dafeiyu-pet) 的 fork，v1.0 的打磨与 Release 发布在这里。
 
 DeepSeek V4 Pro 二创形象「鲸鱼娘·大肥鱼」的透明桌面宠物。
 
@@ -12,7 +14,7 @@ DeepSeek V4 Pro 二创形象「鲸鱼娘·大肥鱼」的透明桌面宠物。
 
 ### 方式一：免安装 exe（推荐）
 
-到 [Releases](https://github.com/1190fasheqi/dafeiyu-pet/releases) 下载 `dafeiyu-pet.exe`，双击即用，不需要安装 Python。
+到 [Releases](https://github.com/whyever77/dafeiyu-pet/releases) 下载 `dafeiyu-pet.exe`，双击即用，不需要安装 Python。
 
 > 杀毒软件可能对 PyInstaller 产物误报，加信任即可。
 
