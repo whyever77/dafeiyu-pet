@@ -10,6 +10,21 @@ DeepSeek V4 Pro 二创形象「鲸鱼娘·大肥鱼」的透明桌面宠物。
 
 基于三视图素材（正面 / 侧面 / 背面），用 Python + PySide6 实现，无边框透明置顶窗口。
 
+## 平台支持
+
+| 能力 | Windows | macOS |
+|------|---------|-------|
+| 运行方式 | `dafeiyu-pet.exe` / `启动桌宠.bat` / 源码 | `大肥鱼桌宠.app` / `启动桌宠.command` / 源码 |
+| 透明无边框、三视图行走、拖拽、喂食、聊天、天气 | ✅ | ✅ |
+| 菜单栏 / 托盘菜单 | ✅ | ✅（菜单栏图标） |
+| 鼠标穿透 | ✅ `WS_EX_TRANSPARENT` | ✅ `WindowTransparentForInput`（= `NSWindow.ignoresMouseEvents`） |
+| 开机自启 | ✅ 启动目录 `.lnk` | ✅ `~/Library/LaunchAgents/com.dafeiyu.pet.plist` |
+| CPU / 内存提醒 | ✅ | ✅ |
+| NVIDIA 显卡温度提醒 | ✅ | ❌（macOS 无 NVML） |
+| 打包产物 | 单文件 `.exe` | `.app`（未签名，首次需右键→打开） |
+
+macOS 支持已补全：修掉了「鼠标穿透」直接崩（`ctypes.windll` 不存在）和「开机自启」直接崩（`APPDATA` 不存在）两个问题，并补了启动器、`.app` 打包与 macOS CI。
+
 ## 下载 / 快速开始
 
 ### 方式一：免安装 exe（推荐）
@@ -28,6 +43,28 @@ python 桌宠.py
 ```
 
 Windows 用户也可以直接双击 `启动桌宠.bat`（自动选择 `.venv` 或系统 Python；缺依赖时会在窗口里提示）。
+
+### 方式三：macOS
+
+需要 **Python 3.11+**（`brew install python@3.11` 或从 python.org 装安装包）：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python 桌宠.py        # 或者双击 启动桌宠.command
+```
+
+也可以直接双击 `启动桌宠.command`（会自动挑 `.venv/bin/python`，没有就用系统 `python3`）。
+
+- **开机自启**：右键菜单勾选「开机自启」后，会写 `~/Library/LaunchAgents/com.dafeiyu.pet.plist` 并
+  `launchctl bootstrap` 到当前登录会话；取消勾选会 `bootout` 并删掉该文件。想手动清：
+  `launchctl bootout gui/$(id -u)/com.dafeiyu.pet && rm ~/Library/LaunchAgents/com.dafeiyu.pet.plist`
+- **鼠标穿透**：macOS 上走 Qt 的 `WindowTransparentForInput`（等价 `NSWindow.ignoresMouseEvents`），
+  开启后点不到鱼，从菜单栏托盘图标右键解除。
+- **托盘图标**：macOS 没有右下角托盘，图标在屏幕右上角菜单栏。
+- 用 `.app` 运行时系统可能弹一次「App 后台活动：可在后台运行」，这是 `LSUIElement` 应用在 macOS 15+
+  的正常提示，允许即可。
+- 精灵素材最高 306px，Retina 屏上会被放大，边缘会略糊（见「已知限制」）。
 
 ## 功能
 
@@ -84,6 +121,9 @@ Windows 用户也可以直接双击 `启动桌宠.bat`（自动选择 `.venv` �
 
 运行日志写在程序目录的 `pet.log`，启动失败或异常时可先看这里。
 
+macOS 用 `.app` 打包版运行时，程序目录在 `.app` 内部、按惯例只读，所以配置和日志改放
+`~/Library/Application Support/大肥鱼桌宠/`（`config.json`、`pet.log` 都在那里）。源码运行仍是程序目录。
+
 ## 打包成独立 exe
 
 ```bash
@@ -92,6 +132,20 @@ pyinstaller --noconfirm --onefile --windowed --name dafeiyu-pet --add-data "spri
 ```
 
 产物在 `dist/dafeiyu-pet.exe`。推送 `v*` 标签时，GitHub Actions 也会自动构建并发布 Release（见 `.github/workflows/build-release.yml`）。
+
+### 打包 macOS `.app`
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm 桌宠-macos.spec
+```
+
+产物在 `dist/大肥鱼桌宠.app`。`桌宠-macos.spec` 里写了 `LSUIElement=True`（不占 Dock，只留菜单栏图标）、
+`NSHighResolutionCapable=True`，图标用 `icon.icns`。推送 `v*` 标签时，`build-macos` job 会把它压成
+`dafeiyu-pet-macos.zip` 一起发布。
+
+> 未做代码签名/公证，第一次打开会提示「无法验证开发者」，右键 →「打开」即可；
+> 从网上下载的 zip 还可能有 quarantine 标记，必要时 `xattr -dr com.apple.quarantine 大肥鱼桌宠.app`。
 
 ## 更换形象
 
@@ -116,10 +170,14 @@ python preprocess.py <素材目录> [输出目录]
 | preprocess.py | 白底三视图抠图脚本 |
 | preprocess2.py | 精灵边缘去污 + 多尺寸生成脚本 |
 | sprites/ | 精灵图（正面/侧面/背面 各尺寸 + 图标） |
-| 启动桌宠.bat | 启动脚本（自动选择 venv 或系统 Python，缺环境会提示） |
+| platform_support.py | 平台差异（字体族 / 开机自启：Windows `.lnk`、macOS LaunchAgent） |
+| 启动桌宠.bat | Windows 启动脚本（自动选择 venv 或系统 Python，缺环境会提示） |
+| 启动桌宠.command | macOS 双击启动脚本（同上，优先 `.venv/bin/python`） |
 | requirements.txt | 依赖 |
 | config.example.json | 配置示例 |
-| 桌宠.spec | PyInstaller 打包配置 |
+| 桌宠.spec | PyInstaller 打包配置（Windows 单文件 exe） |
+| 桌宠-macos.spec | PyInstaller 打包配置（macOS `.app`，`LSUIElement`） |
+| icon.icns | macOS 应用图标（由 icon.ico 生成） |
 | test_pet.py | 基础自动化测试（菜单 / 配置保存 / 喂食动画 / 天气异步） |
 | tools/package_source.py | 打源码 zip（UTF-8 文件名，供 CI 使用） |
 | .github/workflows/build-release.yml | 打 tag 自动构建 exe 并发布 Release |
@@ -129,6 +187,9 @@ python preprocess.py <素材目录> [输出目录]
 ```bash
 python test_pet.py
 ```
+
+CI 在 Windows 和 macOS 两个 runner 上都跑同一套测试（`.github/workflows/test.yml`，`QT_QPA_PLATFORM=offscreen`），
+macOS 专属用例（LaunchAgent plist、字体、鼠标穿透）只在 macOS 上执行。
 
 ## 常见问题
 
@@ -150,7 +211,17 @@ python -m pip install -r requirements.txt
 `wttr.in` 在国内网络下偶尔不稳定，稍后重试或换个网络即可；失败不会卡住桌宠。
 
 **开机自启没有生效**
-确认程序所在路径没有被移动 / 删除；重新勾选一次「开机自启」会重建启动快捷方式。
+确认程序所在路径没有被移动 / 删除；重新勾选一次「开机自启」会重建启动快捷方式
+（Windows 是启动目录 `.lnk`，macOS 是 `~/Library/LaunchAgents/com.dafeiyu.pet.plist`）。
+
+**macOS：双击 `.command` 提示「无法打开，因为无法验证开发者」**
+右键 →「打开」一次即可；或在「系统设置 → 隐私与安全性」里点「仍要打开」。
+
+**macOS：开了鼠标穿透后点不到鱼了**
+从屏幕右上角菜单栏的托盘图标右键，取消「鼠标穿透（点不到它）」。
+
+**macOS：`.app` 的 config.json 在哪**
+`~/Library/Application Support/大肥鱼桌宠/config.json`（同目录还有 `pet.log`）。
 
 ## 贡献与致谢
 

@@ -10,7 +10,6 @@ import logging
 import math
 import os
 import random
-import subprocess
 import sys
 import threading
 import urllib.parse
@@ -32,6 +31,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon,
                                QMessageBox, QInputDialog, QLineEdit, QVBoxLayout,
                                QHBoxLayout, QPushButton, QFrame, QDialog, QToolButton)
 
+import platform_support as plat
+
 
 
 # ===== DeepSeek 配置 =====
@@ -40,8 +41,19 @@ DS_MODEL = "deepseek-chat"
 DS_SYSTEM = "你是桌面宠物大肥鱼，贱兮兮但可爱，每句话不超过25字，偶尔吐槽主人但别真骂人。"
 
 if getattr(sys, "frozen", False):
-    APP_DIR = os.path.dirname(sys.executable)
-    BUNDLE_DIR = getattr(sys, "_MEIPASS", APP_DIR)
+    BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    if sys.platform == "darwin" and "/Contents/MacOS/" in sys.executable:
+        # .app 里的内容视为只读（写进去还会破坏签名），配置与日志按 macOS 惯例放
+        # ~/Library/Application Support/大肥鱼桌宠/
+        APP_DIR = os.path.join(os.path.expanduser("~/Library/Application Support"),
+                               "大肥鱼桌宠")
+        try:
+            os.makedirs(APP_DIR, exist_ok=True)
+        except OSError:
+            # 极端情况下（磁盘只读 / 权限异常）退回可执行文件目录，别在 import 阶段就崩
+            APP_DIR = os.path.dirname(sys.executable)
+    else:
+        APP_DIR = os.path.dirname(sys.executable)
     PYTHONW = sys.executable
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -339,7 +351,7 @@ class FoodPanel(QWidget):
         for f in FOODS:
             b = QToolButton()
             b.setText(f)
-            b.setFont(QFont("Segoe UI Emoji", 20))
+            b.setFont(QFont(plat.emoji_font_family(), 20))
             b.setFixedSize(44, 44)
             b.setStyleSheet(
                 "QToolButton{background:rgba(255,255,255,235);border:2px solid #ffb3c8;"
@@ -348,7 +360,7 @@ class FoodPanel(QWidget):
             lay.addWidget(b)
         close = QToolButton()
         close.setText("✕")
-        close.setFont(QFont("Microsoft YaHei UI", 12))
+        close.setFont(QFont(plat.ui_font_family(), 12))
         close.setFixedSize(26, 26)
         close.setStyleSheet("QToolButton{background:rgba(255,255,255,200);border:none;border-radius:13px;color:#666;}"
                             "QToolButton:hover{background:#ff7fa8;color:#fff;}")
@@ -471,7 +483,7 @@ class PetWindow(QWidget):
         self.timer.timeout.connect(self.tick)
         self.timer.start(TICK)
 
-        self.bubble_font = QFont("Microsoft YaHei UI", 11)
+        self.bubble_font = QFont(plat.ui_font_family(), 11)
 
         # 托盘
         self.tray = QSystemTrayIcon(self.icon, self)
@@ -1032,6 +1044,14 @@ class PetWindow(QWidget):
         self.move(x, y)
 
     def _apply_passthrough(self, on):
+        if plat.IS_MACOS:
+            # macOS 上 Qt 会把 WindowTransparentForInput 映射到 NSWindow.ignoresMouseEvents，
+            # 效果等同 Windows 的 WS_EX_TRANSPARENT；改窗口 flag 会让窗口隐藏，需要重新 show。
+            visible = self.isVisible()
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, bool(on))
+            if visible:
+                self.show()
+            return
         hwnd = int(self.winId())
         GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT = -20, 0x80000, 0x20
         style = ctypes.windll.user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -1056,28 +1076,17 @@ class PetWindow(QWidget):
         self.save_config()
 
     def set_autostart(self, on):
-        lnk = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows",
-                           "Start Menu", "Programs", "Startup", "大肥鱼桌宠.lnk")
         try:
+            if getattr(sys, "frozen", False):
+                program_args = [sys.executable]
+            else:
+                program_args = [PYTHONW, os.path.join(APP_DIR, "桌宠.py")]
             if on:
-                if getattr(sys, "frozen", False):
-                    target, args = sys.executable, ""
-                else:
-                    target = PYTHONW
-                    args = f'"{os.path.join(APP_DIR, "桌宠.py")}"'
-                ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');"
-                      "$s.TargetPath='{}';$s.Arguments='{}';$s.WorkingDirectory='{}';$s.Save()"
-                      .format(lnk.replace("'", "''"),
-                              target.replace("'", "''"),
-                              args.replace("'", "''"),
-                              APP_DIR.replace("'", "''")))
-                subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=True)
+                plat.install_autostart(program_args, APP_DIR, LOG_PATH)
                 self.cfg["autostart"] = True
                 self.say("已开机自启，明天见～")
             else:
-                if os.path.exists(lnk):
-                    os.remove(lnk)
+                plat.remove_autostart()
                 self.cfg["autostart"] = False
                 self.say("已取消开机自启")
             self.save_config()
@@ -1108,6 +1117,7 @@ class PetWindow(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName("大肥鱼桌宠")
     app.setQuitOnLastWindowClosed(False)
     w = PetWindow()
     sys.exit(app.exec())
