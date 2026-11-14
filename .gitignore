@@ -9,6 +9,8 @@ pet.log
 build/
 dist/
 *.spec
+!桌宠.spec
+!桌宠-macos.spec
 dafeiyu-pet-source.zip
 
 # Python 缓存

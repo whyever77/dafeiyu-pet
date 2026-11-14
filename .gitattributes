@@ -4,3 +4,6 @@
 # 图片按二进制处理
 *.png binary
 *.ico binary
+
+# macOS 启动脚本必须 LF，CRLF 会让 bash 报 bad interpreter
+*.command text eol=lf

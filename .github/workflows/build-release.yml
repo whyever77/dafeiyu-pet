@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
@@ -38,6 +38,58 @@ jobs:
 
       - name: Package source zip
         run: python tools/package_source.py
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            dist/dafeiyu-pet.exe
+            dafeiyu-pet-source.zip
+
+  build-macos:
+    runs-on: macos-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .app
+        run: pyinstaller --noconfirm 桌宠-macos.spec
+
+      - name: Zip .app
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/大肥鱼桌宠.app" "dist/dafeiyu-pet-macos.zip"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: dist/dafeiyu-pet-macos.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lR artifacts
 
       # 同一 tag 重跑时，先删掉旧 assets，避免 default.exe / 乱码 zip 残留
       - name: Delete old release assets
@@ -69,5 +121,6 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           files: |
-            dist/dafeiyu-pet.exe
-            dafeiyu-pet-source.zip
+            artifacts/dist/dafeiyu-pet.exe
+            artifacts/dafeiyu-pet-source.zip
+            artifacts/dafeiyu-pet-macos.zip
